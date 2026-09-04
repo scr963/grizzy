@@ -1,0 +1,8 @@
+*.wav
+grizzy_settings.json
+wav_player_logs_*.csv
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
