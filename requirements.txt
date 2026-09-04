@@ -1,0 +1,12 @@
+# Required
+pygame-ce>=2.5
+
+# Optional: CPU/memory debug readouts
+psutil
+
+# Optional: skin backgrounds (JPEG/BMP) and window icon scaling
+pillow
+
+# Optional: reverse playback for non-WAV formats (also needs ffmpeg on PATH)
+pydub
+audioop-lts; python_version >= "3.13"
