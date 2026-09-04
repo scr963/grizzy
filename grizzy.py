@@ -621,13 +621,19 @@ class SoundPlayerApp:
             pts = []
             if self.scope_samples is not None and self.sound_channel.get_busy() and not self.paused:
                 pos = int((time.time() - self.scope_start) * 44100) * 2  # stereo frame offset
-                seg = self.scope_samples[pos:pos + 2048]  # ~23ms of L/R pairs
-                frames = len(seg) // 2
+                delay = 96  # ~2ms delay line for mono material
+                seg = self.scope_samples[pos:pos + 2048 + delay * 2]
+                frames = len(seg) // 2 - delay
                 if frames > 8:
+                    # Mono content has identical channels (X=Y draws a diagonal);
+                    # detect it and drive Y from a delayed copy instead, like a
+                    # hardware delay line, so mono traces loops and ellipses
+                    mono = all(abs(seg[2 * i] - seg[2 * i + 1]) < 512 for i in range(0, frames, max(frames // 16, 1)))
                     step = max(frames // 256, 1)  # beam traces up to 256 points
                     for i in range(0, frames - 1, step):
-                        pts.append(cx + (seg[2 * i] / 32768.0) * amp)      # left  -> X
-                        pts.append(cy - (seg[2 * i + 1] / 32768.0) * amp)  # right -> Y
+                        y_sample = seg[2 * (i + delay)] if mono else seg[2 * i + 1]
+                        pts.append(cx + (seg[2 * i] / 32768.0) * amp)  # left -> X
+                        pts.append(cy - (y_sample / 32768.0) * amp)
             if len(pts) < 4:
                 pts = [cx - 0.5, cy, cx + 0.5, cy]  # idle beam: a resting dot
             for item in (self.scope_glow, self.scope_mid, self.scope_beam):
