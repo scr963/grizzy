@@ -130,6 +130,8 @@ class SoundPlayerApp:
         # MIDI selection (row 5)
         self.midi_button = tk.Button(root, text="Select MIDI", command=self.select_midi, bg='#555555', fg='#FFD700', activebackground='#666666', font=self.default_font)
         self.midi_button.grid(row=5, column=0, columnspan=2, padx=5, pady=3, sticky="ew")
+        self.stop_midi_button = tk.Button(root, text="Stop MIDI", command=self.stop_midi, state=tk.DISABLED, bg='#555555', fg='#FFD700', activebackground='#666666', font=self.default_font)
+        self.stop_midi_button.grid(row=5, column=2, padx=5, pady=3, sticky="ew")
 
         # Status and current sound (row 6)
         self.status_label = tk.Label(root, text="Status: Stopped", fg='#FF6347', bg='#333333', font=self.default_font)
@@ -271,10 +273,17 @@ class SoundPlayerApp:
                 pygame.mixer.music.load(file_path)
                 pygame.mixer.music.set_volume(1.0)
                 pygame.mixer.music.play(loops=-1)
+                self.stop_midi_button.config(state=tk.NORMAL)
                 print(f"Loaded MIDI file: {file_path}")
             except Exception as e:
                 self.log_error(f"Failed to load MIDI file: {e}. Ensure the file is a valid MIDI file and a MIDI synthesizer is available on your system.")
                 print(f"Error loading MIDI file: {e}")
+
+    def stop_midi(self):
+        pygame.mixer.music.stop()
+        self.midi_file = None
+        self.stop_midi_button.config(state=tk.DISABLED)
+        print("Stopped MIDI playback")
 
     def play_sound(self, file_path):
         try:
