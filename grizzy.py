@@ -8,6 +8,7 @@ import site
 import csv
 import json
 import wave
+import array
 import tempfile
 import pygame
 
@@ -34,7 +35,7 @@ class SoundPlayerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Grizzy")
-        self.root.geometry("620x460")  # Fits within 640x480 with small border
+        self.root.geometry("620x560")
         self.root.configure(bg='#333333')  # Softer dark gray background
 
         print(f"Starting script at {time.strftime('%H:%M:%S')}")
@@ -73,14 +74,14 @@ class SoundPlayerApp:
         self.bg_image = None
         self.bg_photo = None
         self.bg_label = tk.Label(root, bg='#333333')
-        self.bg_label.grid(row=0, column=0, rowspan=13, columnspan=6, sticky="nsew")  # Cover all rows
+        self.bg_label.grid(row=0, column=0, rowspan=14, columnspan=6, sticky="nsew")  # Cover all rows
 
         # Debounce variable for resizing
         self.resize_timer = None
         self.last_resized_dimensions = (0, 0)  # Track last resized dimensions to avoid redundant updates
 
         # Configure grid weights for resizing
-        for i in range(13):
+        for i in range(14):
             root.grid_rowconfigure(i, weight=1)
         for i in range(6):
             root.grid_columnconfigure(i, weight=1)
@@ -176,6 +177,17 @@ class SoundPlayerApp:
         self.memory_label.pack(pady=1)
         self.save_button = tk.Button(self.debug_frame, text="Save Logs", command=self.save_data, bg='#555555', fg='#FFD700', activebackground='#666666', font=self.default_font)
         self.save_button.pack(pady=3)
+
+        # Laser oscilloscope (row 13)
+        self.scope_canvas = tk.Canvas(root, height=90, bg='#000000', highlightthickness=1, highlightbackground='#004400')
+        self.scope_canvas.grid(row=13, column=0, columnspan=6, padx=5, pady=3, sticky="nsew")
+        self.scope_samples = None   # 16-bit samples of the currently playing sound
+        self.scope_start = 0.0      # when playback of that sound began
+        # Layered lines fake a laser glow: wide dim -> narrow bright
+        self.scope_glow = self.scope_canvas.create_line(0, 0, 0, 0, fill='#003300', width=6, smooth=True)
+        self.scope_mid = self.scope_canvas.create_line(0, 0, 0, 0, fill='#00BB00', width=2, smooth=True)
+        self.scope_beam = self.scope_canvas.create_line(0, 0, 0, 0, fill='#B4FFB4', width=1, smooth=True)
+        self.root.after(50, self.update_scope)
 
         # Playback variables
         self.wav_files = []  # Will include all supported audio formats
@@ -296,6 +308,10 @@ class SoundPlayerApp:
                 self.sound_channel.stop()
             self.sound_channel.set_volume(1.0)
             self.sound_channel.play(sound)
+            # Feed the oscilloscope: mixer format is 16-bit stereo 44100
+            raw = sound.get_raw()
+            self.scope_samples = array.array('h', raw[:len(raw) // 2 * 2])
+            self.scope_start = time.time()
         except Exception as e:
             self.log_error(f"Failed to play sound: {e}")
             print(f"Error playing sound: {e}")
@@ -594,6 +610,29 @@ class SoundPlayerApp:
             min_delay, max_delay = 1.0, 5.0  # fall back while the user is mid-edit
         delay = random.uniform(min_delay, max_delay)
         self.after_id_play = self.root.after(int(delay * 1000), self.play_next)
+
+    def update_scope(self):
+        try:
+            w = max(self.scope_canvas.winfo_width(), 2)
+            h = max(self.scope_canvas.winfo_height(), 2)
+            mid = h / 2
+            pts = []
+            if self.scope_samples is not None and self.sound_channel.get_busy() and not self.paused:
+                pos = int((time.time() - self.scope_start) * 44100) * 2  # stereo frame offset
+                seg = self.scope_samples[pos:pos + 2048]
+                if len(seg) > 8:
+                    n = min(max(w // 4, 32), 160)  # points across the beam
+                    step = max(len(seg) // n, 2)
+                    for x in range(0, len(seg) - 1, step):
+                        pts.append(x / len(seg) * w)
+                        pts.append(mid - (seg[x] / 32768.0) * (mid - 4))
+            if len(pts) < 4:
+                pts = [0, mid, w, mid]  # idle beam
+            for item in (self.scope_glow, self.scope_mid, self.scope_beam):
+                self.scope_canvas.coords(item, *pts)
+        except Exception:
+            pass
+        self.root.after(40, self.update_scope)
 
     def update_debug_info(self):
         if not self.playing or self.paused:
