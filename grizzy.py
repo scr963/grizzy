@@ -3,15 +3,32 @@ from tkinter import filedialog, messagebox, ttk
 import os
 import random
 import time
-import psutil
 import sys
 import site
 import csv
 import json
-from PIL import Image, ImageTk
-from pydub import AudioSegment
+import wave
 import tempfile
 import pygame
+
+# Optional dependencies: the app runs without them with reduced features.
+try:
+    import psutil  # CPU/memory debug readouts
+except ImportError:
+    psutil = None
+try:
+    from PIL import Image, ImageTk  # JPEG/BMP skins and smooth resizing
+except ImportError:
+    Image = ImageTk = None
+try:
+    from pydub import AudioSegment  # reverse playback for non-WAV formats
+except ImportError:
+    AudioSegment = None
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SETTINGS_FILE = os.path.join(BASE_DIR, "grizzy_settings.json")
+MAX_HISTORY = 3600  # cap in-memory history lists
+MAX_LOG_LINES = 500  # cap event-log widget size
 
 class SoundPlayerApp:
     def __init__(self, root):
@@ -26,8 +43,11 @@ class SoundPlayerApp:
 
         # Set the window icon
         try:
-            icon_image = Image.open("bear_icon.png")  # Adjust the filename as needed
-            icon_photo = ImageTk.PhotoImage(icon_image)
+            icon_path = os.path.join(BASE_DIR, "bear_icon.png")
+            if Image:
+                icon_photo = ImageTk.PhotoImage(Image.open(icon_path))
+            else:
+                icon_photo = tk.PhotoImage(file=icon_path)
             self.root.iconphoto(True, icon_photo)
             print("Successfully set window icon")
         except Exception as e:
@@ -191,7 +211,7 @@ class SoundPlayerApp:
 
     def load_settings(self):
         try:
-            with open("grizzy_settings.json", "r") as f:
+            with open(SETTINGS_FILE, "r") as f:
                 settings = json.load(f)
             self.folder_entry.delete(0, tk.END)
             self.folder_entry.insert(0, settings.get("folder_path", ""))
@@ -218,13 +238,15 @@ class SoundPlayerApp:
             "reverse_playback": self.reverse_playback_var.get(),
         }
         try:
-            with open("grizzy_settings.json", "w") as f:
+            with open(SETTINGS_FILE, "w") as f:
                 json.dump(settings, f, indent=4)
             print("Saved settings to grizzy_settings.json")
         except Exception as e:
             print(f"Error saving settings: {e}")
 
     def reset_to_defaults(self):
+        if self.playing:
+            self.stop_playing()
         self.folder_entry.delete(0, tk.END)
         self.wav_files = []
         self.scan_source = None
@@ -256,28 +278,45 @@ class SoundPlayerApp:
 
     def play_sound(self, file_path):
         try:
-            audio = AudioSegment.from_file(file_path)
             if self.reverse_playback_var.get():
-                audio = audio.reverse()
-            temp_fd, temp_path = tempfile.mkstemp(suffix=".wav")
-            os.close(temp_fd)
-            audio.export(temp_path, format="wav")
-            self.temp_file = temp_path
+                sound = self._load_reversed(file_path)
+            else:
+                # pygame loads WAV/OGG/MP3/FLAC natively - no conversion needed
+                sound = pygame.mixer.Sound(file_path)
             if self.allow_interrupt_var.get():
                 self.sound_channel.stop()
-            sound = pygame.mixer.Sound(temp_path)
             self.sound_channel.set_volume(1.0)
             self.sound_channel.play(sound)
         except Exception as e:
             self.log_error(f"Failed to play sound: {e}")
             print(f"Error playing sound: {e}")
+
+    def _load_reversed(self, file_path):
+        temp_fd, temp_path = tempfile.mkstemp(suffix=".wav")
+        os.close(temp_fd)
+        try:
+            if file_path.lower().endswith(".wav"):
+                with wave.open(file_path, "rb") as w:
+                    params = w.getparams()
+                    frames = w.readframes(w.getnframes())
+                frame_size = params.sampwidth * params.nchannels
+                reversed_frames = b"".join(
+                    frames[i:i + frame_size]
+                    for i in range(len(frames) - frame_size, -1, -frame_size)
+                )
+                with wave.open(temp_path, "wb") as w:
+                    w.setparams(params)
+                    w.writeframes(reversed_frames)
+            elif AudioSegment:
+                AudioSegment.from_file(file_path).reverse().export(temp_path, format="wav")
+            else:
+                raise RuntimeError("Reversing non-WAV files requires pydub (pip install pydub audioop-lts)")
+            return pygame.mixer.Sound(temp_path)
         finally:
-            if self.temp_file:
-                try:
-                    os.remove(self.temp_file)
-                except Exception as e:
-                    print(f"Error cleaning up temporary file: {e}")
-                self.temp_file = None
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
     def scan_drive(self):
         self.browse_button.config(state=tk.DISABLED)
@@ -318,6 +357,7 @@ class SoundPlayerApp:
 
         tk.Button(dialog, text="Scan", command=on_select, bg='#555555', fg='#FFD700', activebackground='#666666', font=self.default_font).pack(pady=5)
         tk.Button(dialog, text="Cancel", command=on_cancel, bg='#555555', fg='#FFD700', activebackground='#666666', font=self.default_font).pack(pady=5)
+        dialog.protocol("WM_DELETE_WINDOW", on_cancel)
 
         dialog.transient(self.root)
         dialog.grab_set()
@@ -359,6 +399,9 @@ class SoundPlayerApp:
         self.instant_button.config(state=tk.NORMAL)
 
     def select_skin(self):
+        if not Image:
+            self.log_error("Skins require Pillow (pip install pillow).")
+            return
         file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp *.gif")])
         if file_path:
             try:
@@ -375,7 +418,7 @@ class SoundPlayerApp:
             win_height = max(1, self.root.winfo_height())
             current_dimensions = (win_width, win_height)
             if current_dimensions != self.last_resized_dimensions:
-                image = self.bg_image.resize((win_width, win_height), Image.Resampling.LANCZOS)
+                image = self.bg_image.resize((win_width, win_height), Image.Resampling.BILINEAR)
                 self.bg_photo = ImageTk.PhotoImage(image)
                 self.bg_label.configure(image=self.bg_photo)
                 self.last_resized_dimensions = current_dimensions
@@ -396,13 +439,20 @@ class SoundPlayerApp:
                 self.folder_entry.delete(0, tk.END)
                 self.folder_entry.insert(0, folder)
             supported_formats = ('.wav', '.mp3', '.flac', '.ogg', '.aac', '.wma', '.aiff', '.m4a', '.opus', '.amr', '.ape')
-            self.wav_files = [os.path.join(folder, f) for f in os.listdir(folder) if f.lower().endswith(supported_formats)]
+            self.wav_files = [
+                os.path.join(root_dir, f)
+                for root_dir, _, files in os.walk(folder)
+                for f in files
+                if f.lower().endswith(supported_formats)
+            ]
             self.scan_source = folder
             self.update_wav_list()
             if not load_from_settings:
                 self.save_settings()
 
     def clear_folder(self):
+        if self.playing:
+            self.stop_playing()
         self.folder_entry.delete(0, tk.END)
         self.wav_files = []
         self.scan_source = None
@@ -464,6 +514,7 @@ class SoundPlayerApp:
             self.paused = False
             self.pause_button.config(text="Pause")
             self.status_label.config(text="Status: Playing", fg="#32CD32")
+            self.sound_channel.unpause()
             self.play_next()
             self.update_debug_info()
         else:
@@ -503,31 +554,35 @@ class SoundPlayerApp:
         current_time = time.strftime("%H:%M:%S")
         log_message = f"Instant play: {os.path.basename(file)} at {current_time}\n"
         self.play_history.append((time.time(), file, self.current_cpu_usage))
+        del self.play_history[:-MAX_HISTORY]
         self.current_sound_label.config(text=f"Current sound: {os.path.basename(file)}")
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, log_message)
-        self.log_text.see(tk.END)
-        self.log_text.config(state=tk.DISABLED)
+        self._append_log(log_message)
         self.last_play_time = time.time()
         print(f"Instant play recorded: {file} at {current_time}, CPU usage: {self.current_cpu_usage}%")
 
     def play_next(self):
         if not self.playing or self.paused:
             return
+        if not self.wav_files:
+            self.stop_playing()
+            self.log_error("No audio files loaded, playback stopped.")
+            return
         file = random.choice(self.wav_files)
         self.play_sound(file)
         current_time = time.strftime("%H:%M:%S")
         log_message = f"Sound played: {os.path.basename(file)} at {current_time}\n"
         self.play_history.append((time.time(), file, self.current_cpu_usage))
+        del self.play_history[:-MAX_HISTORY]
         self.current_sound_label.config(text=f"Current sound: {os.path.basename(file)}")
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, log_message)
-        self.log_text.see(tk.END)
-        self.log_text.config(state=tk.DISABLED)
+        self._append_log(log_message)
         self.last_play_time = time.time()
-        print(f"Next play recorded: {file} at {current_time}, CPU usage: {self.current_cpu_usage}%")
-        min_delay = float(self.min_delay_entry.get())
-        max_delay = float(self.max_delay_entry.get())
+        try:
+            min_delay = float(self.min_delay_entry.get())
+            max_delay = float(self.max_delay_entry.get())
+            if min_delay < 0 or max_delay < min_delay:
+                raise ValueError
+        except ValueError:
+            min_delay, max_delay = 1.0, 5.0  # fall back while the user is mid-edit
         delay = random.uniform(min_delay, max_delay)
         self.after_id_play = self.root.after(int(delay * 1000), self.play_next)
 
@@ -539,23 +594,34 @@ class SoundPlayerApp:
             self.time_since_label.config(text=f"Time since last sound: {time_since:.1f} seconds")
         else:
             self.time_since_label.config(text="Time since last sound: N/A")
-        cpu_usage = psutil.cpu_percent(interval=None)
-        self.current_cpu_usage = cpu_usage
-        memory_usage = psutil.virtual_memory().percent
-        self.cpu_history.append((time.time(), cpu_usage))
-        self.memory_history.append((time.time(), memory_usage))
-        self.cpu_label.config(text=f"CPU usage: {cpu_usage}%")
-        self.memory_label.config(text=f"Memory usage: {memory_usage}%")
-        print(f"Debug info updated: CPU usage: {cpu_usage}%, Memory usage: {memory_usage}%")
-        self.after_id_update = self.root.after(1000, self.update_debug_info)
+        if psutil:
+            cpu_usage = psutil.cpu_percent(interval=None)
+            self.current_cpu_usage = cpu_usage
+            memory_usage = psutil.virtual_memory().percent
+            self.cpu_history.append((time.time(), cpu_usage))
+            self.memory_history.append((time.time(), memory_usage))
+            del self.cpu_history[:-MAX_HISTORY]
+            del self.memory_history[:-MAX_HISTORY]
+            self.cpu_label.config(text=f"CPU usage: {cpu_usage}%")
+            self.memory_label.config(text=f"Memory usage: {memory_usage}%")
+        else:
+            self.cpu_label.config(text="CPU usage: N/A (psutil not installed)")
+            self.memory_label.config(text="Memory usage: N/A (psutil not installed)")
+        self.after_id_update = self.root.after(2000, self.update_debug_info)
+
+    def _append_log(self, message):
+        self.log_text.config(state=tk.NORMAL)
+        self.log_text.insert(tk.END, message)
+        line_count = int(self.log_text.index('end-1c').split('.')[0])
+        if line_count > MAX_LOG_LINES:
+            self.log_text.delete("1.0", f"{line_count - MAX_LOG_LINES + 1}.0")
+        self.log_text.see(tk.END)
+        self.log_text.config(state=tk.DISABLED)
 
     def log_error(self, message):
         current_time = time.strftime("%H:%M:%S")
         log_message = f"Error: {message} at {current_time}\n"
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, log_message)
-        self.log_text.see(tk.END)
-        self.log_text.config(state=tk.DISABLED)
+        self._append_log(log_message)
         messagebox.showerror("Error", message)
 
     def save_data(self):
