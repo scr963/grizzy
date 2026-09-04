@@ -183,17 +183,11 @@ class SoundPlayerApp:
         self.scope_canvas.grid(row=12, column=5, padx=5, pady=3)
         self.scope_samples = None   # 16-bit samples of the currently playing sound
         self.scope_start = 0.0      # when playback of that sound began
-        self.scope_depth = 12       # how many waveform slices recede into the distance
-        self.scope_points = 40      # samples per slice
-        self.scope_history = []     # newest slice first
-        # One line per depth, created back-to-front so the newest draws on top,
-        # fading from bright laser green to near-black with distance
-        self.scope_lines = [None] * self.scope_depth
-        for d in range(self.scope_depth - 1, -1, -1):
-            g = int(40 + 215 * (1 - d / self.scope_depth) ** 2)
-            color = f'#{int(g * 0.55):02x}{g:02x}{int(g * 0.55):02x}'
-            width = 2 if d == 0 else 1
-            self.scope_lines[d] = self.scope_canvas.create_line(0, 0, 0, 0, fill=color, width=width, smooth=True)
+        # XY (Lissajous) mode: left channel deflects X, right channel Y.
+        # Layered lines fake the phosphor glow; silence collapses to a dot.
+        self.scope_glow = self.scope_canvas.create_line(0, 0, 0, 0, fill='#002B00', width=7, capstyle=tk.ROUND, joinstyle=tk.ROUND)
+        self.scope_mid = self.scope_canvas.create_line(0, 0, 0, 0, fill='#00A800', width=3, capstyle=tk.ROUND, joinstyle=tk.ROUND)
+        self.scope_beam = self.scope_canvas.create_line(0, 0, 0, 0, fill='#C8FFC8', width=1, capstyle=tk.ROUND, joinstyle=tk.ROUND)
         self.root.after(50, self.update_scope)
 
         # Playback variables
@@ -622,31 +616,22 @@ class SoundPlayerApp:
         try:
             w = max(self.scope_canvas.winfo_width(), 2)
             h = max(self.scope_canvas.winfo_height(), 2)
-            n = self.scope_points
-            # Sample the current playback position into a normalized slice
-            slice_vals = [0.0] * n
+            cx, cy = w / 2.0, h / 2.0
+            amp = min(w, h) / 2.0 - 5
+            pts = []
             if self.scope_samples is not None and self.sound_channel.get_busy() and not self.paused:
                 pos = int((time.time() - self.scope_start) * 44100) * 2  # stereo frame offset
-                seg = self.scope_samples[pos:pos + 2048]
-                if len(seg) > n:
-                    step = len(seg) // n
-                    slice_vals = [seg[i * step] / 32768.0 for i in range(n)]
-            self.scope_history.insert(0, slice_vals)
-            del self.scope_history[self.scope_depth:]
-            # Project each slice with fake perspective: older = smaller,
-            # higher, and dimmer (colors are fixed per depth at creation)
-            for d in range(self.scope_depth):
-                vals = self.scope_history[d] if d < len(self.scope_history) else [0.0] * n
-                t = d / self.scope_depth
-                scale_x = 1.0 - 0.55 * t
-                amp = h * 0.26 * (1.0 - 0.6 * t)
-                y_base = h * 0.78 - t * h * 0.62
-                x0 = w * (1.0 - scale_x) / 2.0
-                pts = []
-                for i, v in enumerate(vals):
-                    pts.append(x0 + (i / (n - 1)) * w * scale_x)
-                    pts.append(y_base - v * amp)
-                self.scope_canvas.coords(self.scope_lines[d], *pts)
+                seg = self.scope_samples[pos:pos + 2048]  # ~23ms of L/R pairs
+                frames = len(seg) // 2
+                if frames > 8:
+                    step = max(frames // 256, 1)  # beam traces up to 256 points
+                    for i in range(0, frames - 1, step):
+                        pts.append(cx + (seg[2 * i] / 32768.0) * amp)      # left  -> X
+                        pts.append(cy - (seg[2 * i + 1] / 32768.0) * amp)  # right -> Y
+            if len(pts) < 4:
+                pts = [cx - 0.5, cy, cx + 0.5, cy]  # idle beam: a resting dot
+            for item in (self.scope_glow, self.scope_mid, self.scope_beam):
+                self.scope_canvas.coords(item, *pts)
         except Exception:
             pass
         self.root.after(40, self.update_scope)
