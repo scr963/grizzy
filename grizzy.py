@@ -35,7 +35,7 @@ class SoundPlayerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Grizzy")
-        self.root.geometry("620x560")
+        self.root.geometry("620x480")
         self.root.configure(bg='#333333')  # Softer dark gray background
 
         print(f"Starting script at {time.strftime('%H:%M:%S')}")
@@ -74,14 +74,14 @@ class SoundPlayerApp:
         self.bg_image = None
         self.bg_photo = None
         self.bg_label = tk.Label(root, bg='#333333')
-        self.bg_label.grid(row=0, column=0, rowspan=14, columnspan=6, sticky="nsew")  # Cover all rows
+        self.bg_label.grid(row=0, column=0, rowspan=13, columnspan=6, sticky="nsew")  # Cover all rows
 
         # Debounce variable for resizing
         self.resize_timer = None
         self.last_resized_dimensions = (0, 0)  # Track last resized dimensions to avoid redundant updates
 
         # Configure grid weights for resizing
-        for i in range(14):
+        for i in range(13):
             root.grid_rowconfigure(i, weight=1)
         for i in range(6):
             root.grid_columnconfigure(i, weight=1)
@@ -178,9 +178,9 @@ class SoundPlayerApp:
         self.save_button = tk.Button(self.debug_frame, text="Save Logs", command=self.save_data, bg='#555555', fg='#FFD700', activebackground='#666666', font=self.default_font)
         self.save_button.pack(pady=3)
 
-        # Laser oscilloscope (row 13)
-        self.scope_canvas = tk.Canvas(root, height=90, bg='#000000', highlightthickness=1, highlightbackground='#004400')
-        self.scope_canvas.grid(row=13, column=0, columnspan=6, padx=5, pady=3, sticky="nsew")
+        # Laser oscilloscope: square panel beside the usage/debug frame
+        self.scope_canvas = tk.Canvas(root, width=110, height=110, bg='#000000', highlightthickness=1, highlightbackground='#004400')
+        self.scope_canvas.grid(row=12, column=5, padx=5, pady=3)
         self.scope_samples = None   # 16-bit samples of the currently playing sound
         self.scope_start = 0.0      # when playback of that sound began
         # Layered lines fake a laser glow: wide dim -> narrow bright
