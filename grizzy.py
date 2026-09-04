@@ -629,6 +629,7 @@ class SoundPlayerApp:
         def mix(f, white=0.0):  # scale brightness, optionally blend toward white
             return '#%02x%02x%02x' % tuple(min(255, int(v * f + 255 * white)) for v in (r, g, b))
 
+        self.scope_canvas.config(highlightbackground=mix(0.27))
         self.scope_canvas.itemconfig(self.scope_after, fill=mix(0.22))
         self.scope_canvas.itemconfig(self.scope_glow, fill=mix(0.45))
         self.scope_canvas.itemconfig(self.scope_mid, fill=mix(1.0))
