@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, colorchooser
 import os
 import random
 import time
@@ -184,10 +184,18 @@ class SoundPlayerApp:
         self.scope_samples = None   # 16-bit samples of the currently playing sound
         self.scope_start = 0.0      # when playback of that sound began
         # XY (Lissajous) mode: left channel deflects X, right channel Y.
-        # Layered lines fake the phosphor glow; silence collapses to a dot.
-        self.scope_glow = self.scope_canvas.create_line(0, 0, 0, 0, fill='#002B00', width=7, capstyle=tk.ROUND, joinstyle=tk.ROUND)
-        self.scope_mid = self.scope_canvas.create_line(0, 0, 0, 0, fill='#00A800', width=3, capstyle=tk.ROUND, joinstyle=tk.ROUND)
-        self.scope_beam = self.scope_canvas.create_line(0, 0, 0, 0, fill='#C8FFC8', width=1, capstyle=tk.ROUND, joinstyle=tk.ROUND)
+        # Layered smoothed lines fake the phosphor glow; silence collapses
+        # to a dot; the afterglow line holds the previous frame's trace.
+        self.scope_color = "#00CC00"
+        self.scope_prev_pts = None
+        line_opts = dict(capstyle=tk.ROUND, joinstyle=tk.ROUND, smooth=True)
+        self.scope_after = self.scope_canvas.create_line(0, 0, 0, 0, width=2, **line_opts)
+        self.scope_glow2 = self.scope_canvas.create_line(0, 0, 0, 0, width=9, **line_opts)
+        self.scope_glow = self.scope_canvas.create_line(0, 0, 0, 0, width=5, **line_opts)
+        self.scope_mid = self.scope_canvas.create_line(0, 0, 0, 0, width=2, **line_opts)
+        self.scope_beam = self.scope_canvas.create_line(0, 0, 0, 0, width=1, **line_opts)
+        self._apply_scope_color()
+        self.scope_canvas.bind("<Button-1>", self.pick_scope_color)
         self.root.after(50, self.update_scope)
 
         # Playback variables
@@ -238,6 +246,8 @@ class SoundPlayerApp:
             self.max_delay_entry.insert(0, settings.get("max_delay", "5"))
             self.allow_interrupt_var.set(settings.get("allow_interrupt", True))
             self.reverse_playback_var.set(settings.get("reverse_playback", False))
+            self.scope_color = settings.get("scope_color", self.scope_color)
+            self._apply_scope_color()
             print("Loaded settings from grizzy_settings.json")
         except FileNotFoundError:
             print("No settings file found, using defaults")
@@ -251,6 +261,7 @@ class SoundPlayerApp:
             "max_delay": self.max_delay_entry.get(),
             "allow_interrupt": self.allow_interrupt_var.get(),
             "reverse_playback": self.reverse_playback_var.get(),
+            "scope_color": self.scope_color,
         }
         try:
             with open(SETTINGS_FILE, "w") as f:
@@ -612,6 +623,26 @@ class SoundPlayerApp:
         delay = random.uniform(min_delay, max_delay)
         self.after_id_play = self.root.after(int(delay * 1000), self.play_next)
 
+    def _apply_scope_color(self):
+        c = self.scope_color.lstrip('#')
+        r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+
+        def mix(f, white=0.0):  # scale brightness, optionally blend toward white
+            return '#%02x%02x%02x' % tuple(min(255, int(v * f + 255 * white)) for v in (r, g, b))
+
+        self.scope_canvas.itemconfig(self.scope_after, fill=mix(0.22))
+        self.scope_canvas.itemconfig(self.scope_glow2, fill=mix(0.16))
+        self.scope_canvas.itemconfig(self.scope_glow, fill=mix(0.45))
+        self.scope_canvas.itemconfig(self.scope_mid, fill=mix(1.0))
+        self.scope_canvas.itemconfig(self.scope_beam, fill=mix(0.55, 0.45))
+
+    def pick_scope_color(self, event=None):
+        _, hex_color = colorchooser.askcolor(initialcolor=self.scope_color, title="Oscilloscope beam color")
+        if hex_color:
+            self.scope_color = hex_color
+            self._apply_scope_color()
+            self.save_settings()
+
     def update_scope(self):
         try:
             w = max(self.scope_canvas.winfo_width(), 2)
@@ -636,7 +667,10 @@ class SoundPlayerApp:
                         pts.append(cy - (y_sample / 32768.0) * amp)
             if len(pts) < 4:
                 pts = [cx - 0.5, cy, cx + 0.5, cy]  # idle beam: a resting dot
-            for item in (self.scope_glow, self.scope_mid, self.scope_beam):
+            # Previous frame lingers dimly, like phosphor persistence
+            self.scope_canvas.coords(self.scope_after, *(self.scope_prev_pts or pts))
+            self.scope_prev_pts = pts
+            for item in (self.scope_glow2, self.scope_glow, self.scope_mid, self.scope_beam):
                 self.scope_canvas.coords(item, *pts)
         except Exception:
             pass
